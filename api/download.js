@@ -206,61 +206,82 @@ module.exports = async (req, res) => {
             } catch (e) { console.error('IG library fail:', e.message); }
         }
 
-        // YouTube: try ytdl-core FIRST (fast, direct CDN URL), then Cobalt as fallback
+        // YouTube: try InnerTube Android API FIRST (bypasses Vercel IP ban), then Cobalt
         if (!result && (url.includes('youtube.com') || url.includes('youtu.be'))) {
-            // Step 1: Try ytdl-core first — it gets direct CDN URLs quickly
-            console.log('[YouTube] Trying ytdl-core first...');
-            try {
-                const ytdl = require('@distube/ytdl-core');
-                const info = await ytdl.getInfo(url);
+            let videoId = '';
+            if (url.includes('v=')) videoId = url.split('v=')[1]?.split('&')[0];
+            else if (url.includes('youtu.be/')) videoId = url.split('youtu.be/')[1]?.split('?')[0];
 
-                let ytdlFormat = null;
-                const strategies = [
-                    () => info.formats.find(f => f.itag === 18 && f.url), // 360p mp4
-                    () => info.formats.find(f => f.itag === 22 && f.url), // 720p mp4
-                    () => info.formats.find(f => f.hasAudio && f.hasVideo && f.url),
-                ];
-
-                for (const strategy of strategies) {
-                    try {
-                        const c = strategy();
-                        if (c && c.url) { ytdlFormat = c; break; }
-                    } catch (e) { }
-                }
-
-                if (ytdlFormat && ytdlFormat.url) {
-                    console.log(`[YTDL-CORE] Got ${ytdlFormat.qualityLabel || '?'} CDN URL`);
-                    const cleanTitle = (info.videoDetails.title || 'youtube_video')
-                        .replace(/[^\w\s-]/g, '').trim().substring(0, 50).replace(/\s+/g, '_');
-                    result = {
-                        url: ytdlFormat.url,
-                        filename: `${cleanTitle}.mp4`,
-                        status: 'redirect',
-                        directCdn: true
-                    };
-                }
-            } catch (e) {
-                console.log('ytdl-core failed:', e.message.substring(0, 80));
-            }
-
-            // Step 2: If ytdl-core failed, try Cobalt with aggressive timeout (max 2 instances)
-            if (!result) {
-                console.log('[YouTube] ytdl-core failed, trying Cobalt (limited)...');
+            if (videoId) {
+                // Step 1: InnerTube Android API — direct CDN URL, no cipher needed
+                console.log(`[YouTube] InnerTube Android API for: ${videoId}`);
                 try {
-                    const fastInstances = STATIC_COBALT_INSTANCES.slice(0, 2);
-                    for (const inst of fastInstances) {
-                        try {
-                            console.log(`[TRY-FAST] ${inst}`);
-                            const r = await tryCobaltInstance(inst, url, format);
-                            if (r && r.url) {
-                                const valid = await validateVideoUrl(r.url);
-                                if (valid) { result = r; console.log(`[OK-FAST] ${inst}`); break; }
+                    const payload = {
+                        videoId,
+                        context: {
+                            client: {
+                                clientName: 'ANDROID',
+                                clientVersion: '19.09.37',
+                                androidSdkVersion: 30,
+                                hl: 'en',
+                                gl: 'US',
+                                userAgent: 'com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip'
                             }
-                        } catch (e) {
-                            console.log(`[FAIL-FAST] ${inst}: ${e.message.substring(0, 60)}`);
+                        },
+                        contentCheckOk: true,
+                        racyCheckOk: true
+                    };
+
+                    const ytRes = await axios.post(
+                        'https://www.youtube.com/youtubei/v1/player?key=AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w&prettyPrint=false',
+                        payload,
+                        {
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'User-Agent': 'com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip',
+                                'X-YouTube-Client-Name': '3',
+                                'X-YouTube-Client-Version': '19.09.37'
+                            },
+                            timeout: 8000
+                        }
+                    );
+
+                    if (ytRes.data?.streamingData?.formats) {
+                        const formats = ytRes.data.streamingData.formats;
+                        const combined = formats.find(f => f.url && f.mimeType?.includes('video/mp4'));
+                        if (combined && combined.url) {
+                            console.log(`[InnerTube] Got ${combined.qualityLabel || '360p'} direct URL`);
+                            const title = (ytRes.data.videoDetails?.title || 'youtube_video')
+                                .replace(/[^\w\s-]/g, '').trim().substring(0, 50).replace(/\s+/g, '_');
+                            result = {
+                                url: combined.url,
+                                filename: `${title}.mp4`,
+                                status: 'redirect',
+                                directCdn: true
+                            };
                         }
                     }
-                } catch (e) { }
+                } catch (e) {
+                    console.log(`[InnerTube] Failed: ${e.message.substring(0, 80)}`);
+                }
+            }
+
+            // Step 2: If InnerTube failed, try Cobalt (limited, 2 instances)
+            if (!result) {
+                console.log('[YouTube] InnerTube failed, trying Cobalt...');
+                const fastInstances = STATIC_COBALT_INSTANCES.slice(0, 2);
+                for (const inst of fastInstances) {
+                    try {
+                        console.log(`[TRY-FAST] ${inst}`);
+                        const r = await tryCobaltInstance(inst, url, format);
+                        if (r && r.url) {
+                            const valid = await validateVideoUrl(r.url);
+                            if (valid) { result = r; console.log(`[OK-FAST] ${inst}`); break; }
+                        }
+                    } catch (e) {
+                        console.log(`[FAIL-FAST] ${inst}: ${e.message.substring(0, 60)}`);
+                    }
+                }
             }
         }
 
