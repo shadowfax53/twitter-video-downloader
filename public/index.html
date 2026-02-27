@@ -170,6 +170,54 @@
             else videoUrlInput.placeholder = 'Video bağlantısını buraya yapıştırın...';
         });
 
+        // Cobalt instances for direct frontend calls (YouTube only)
+        const COBALT_INSTANCES = [
+            'https://api.kektube.com',
+            'https://api.cobalt.liubquanti.click',
+            'https://api.qwkuns.me',
+            'https://co.eepy.today',
+            'https://api.dl.woof.monster',
+            'https://cobaltapi.cjs.nz',
+            'https://cobaltapi.squair.xyz',
+        ];
+
+        async function tryDirectCobalt(videoUrl, format) {
+            const payload = {
+                url: videoUrl,
+                filenameStyle: 'classic',
+                downloadMode: format === 'mp3' ? 'audio' : 'auto',
+                videoQuality: '720'
+            };
+            if (format === 'mp3') { payload.audioFormat = 'mp3'; payload.audioBitrate = '128'; }
+            if (videoUrl.includes('youtube.com') || videoUrl.includes('youtu.be')) {
+                payload.youtubeVideoCodec = 'h264';
+            }
+
+            for (const inst of COBALT_INSTANCES) {
+                try {
+                    const apiUrl = inst.endsWith('/') ? inst : inst + '/';
+                    const r = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    if (!r.ok) continue;
+                    const d = await r.json();
+                    if ((d.status === 'tunnel' || d.status === 'redirect' || d.status === 'stream') && d.url) {
+                        return { url: d.url, filename: d.filename, status: d.status };
+                    }
+                    if (d.status === 'picker' && d.picker && d.picker.length > 0) {
+                        return { url: d.picker[0].url, filename: null, status: 'picker' };
+                    }
+                } catch (e) { /* try next */ }
+            }
+            return null;
+        }
+
+        function isYouTubeUrl(url) {
+            return url.includes('youtube.com') || url.includes('youtu.be');
+        }
+
         downloadBtn.addEventListener('click', async () => {
             const url = videoUrlInput.value.trim();
             const format = formatSelect.value;
@@ -186,46 +234,40 @@
             messageDiv.style.color = '#8899A6';
 
             try {
-                const response = await fetch('/api/download', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ url, format })
-                });
+                let data = null;
 
-                let data;
-                try {
-                    data = await response.json();
-                } catch (e) {
-                    throw new Error('Sunucu şu anda yoğun veya yanıt vermiyor.');
+                // YouTube: try direct Cobalt from browser FIRST (uses user's IP, bypasses Vercel IP ban)
+                if (isYouTubeUrl(url)) {
+                    messageDiv.textContent = 'YouTube videosu tespit edildi, doğrudan sunuculardan alınıyor...';
+                    const cobaltResult = await tryDirectCobalt(url, format);
+                    if (cobaltResult && cobaltResult.url) {
+                        data = { videoUrl: cobaltResult.url, filename: cobaltResult.filename, direct: true };
+                    }
                 }
 
-                if (response.ok && data.videoUrl) {
-                    // Check if widget/external redirect is required
-                    if (data.isWidget) {
-                        messageDiv.innerHTML = `
-                            <div style="background: #253341; padding: 20px; border-radius: 10px; margin-top: 20px;">
-                                <h3 style="color: #FFD700; margin: 0 0 10px 0;">⚠️ Uzun Video / Özel İçerik</h3>
-                                <p style="font-size: 14px; color: #8899A6;">Bu video YouTube tarafından korunduğu veya çok uzun olduğu için <b>Limitsiz Alternatif Sunucuya</b> yönlendiriliyorsunuz.</p>
-                                <p style="font-size: 12px; margin-top: 10px; color: #8899A6;">
-                                    Otomatik olarak yeni sekme açılmazsa aşağıdaki butona tıklayın:
-                                </p>
-                                <a href="${data.videoUrl}" target="_blank" style="
-                                    display: inline-block; background-color: #00BA7C; color: white;
-                                    padding: 10px 25px; text-decoration: none; border-radius: 20px;
-                                    font-weight: bold; margin-top: 8px; font-size: 14px;
-                                ">🌐 Alternatif Sunucuda İndir</a>
-                            </div>
-                        `;
-                        setTimeout(() => { window.open(data.videoUrl, '_blank'); }, 2000);
-                        return;
-                    }
+                // If direct Cobalt didn't work (or not YouTube), use backend API
+                if (!data) {
+                    messageDiv.textContent = 'Sunucu üzerinden işleniyor...';
+                    const response = await fetch('/api/download', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ url, format })
+                    });
 
+                    try {
+                        data = await response.json();
+                    } catch (e) {
+                        throw new Error('Sunucu şu anda yoğun veya yanıt vermiyor.');
+                    }
+                    if (!response.ok || !data.videoUrl) {
+                        throw new Error(data.error || 'İndirme başarısız oldu.');
+                    }
+                }
+
+                if (data && data.videoUrl) {
                     const filename = data.filename || ('video.' + format);
                     const videoUrl = data.videoUrl;
 
-                    // Use hidden iframe to trigger download
-                    // Works for both proxy URLs (/api/proxy?url=) and tunnel URLs
-                    // Both set Content-Disposition: attachment
                     const downloadFrame = document.createElement('iframe');
                     downloadFrame.style.display = 'none';
                     downloadFrame.src = videoUrl;
@@ -246,8 +288,6 @@
                             ">📥 Tekrar İndir</a>
                         </div>
                     `;
-                } else {
-                    throw new Error(data.error || 'İndirme başarısız oldu.');
                 }
             } catch (error) {
                 messageDiv.innerHTML = `
