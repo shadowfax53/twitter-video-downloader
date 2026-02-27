@@ -1,78 +1,47 @@
-// Debug endpoint — InnerTube API'yi Vercel'den doğrudan test et
+// Multi-client InnerTube debug — Vercel'de hangi client çalışıyor test et
 const axios = require('axios');
 
 module.exports = async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
-
     const videoId = req.query.v || 'lBg-bld9TU0';
-    const log = [];
+    const results = {};
 
-    try {
-        log.push(`Testing InnerTube for: ${videoId}`);
-        log.push(`Time: ${new Date().toISOString()}`);
+    const clients = [
+        { name: 'TVHTML5_EMBEDDED', clientName: 'TVHTML5_SIMPLY_EMBEDDED_PLAYER', clientVersion: '2.0', ua: 'Mozilla/5.0', thirdParty: { embedUrl: 'https://www.google.com' } },
+        { name: 'IOS', clientName: 'IOS', clientVersion: '19.09.3', ua: 'com.google.ios.youtube/19.09.3 (iPhone14,3; U; CPU iOS 15_6 like Mac OS X)', extra: { deviceModel: 'iPhone14,3' } },
+        { name: 'WEB_EMBEDDED', clientName: 'WEB_EMBEDDED_PLAYER', clientVersion: '1.20240101.0.0', ua: 'Mozilla/5.0', thirdParty: { embedUrl: 'https://www.google.com' } },
+        { name: 'ANDROID', clientName: 'ANDROID', clientVersion: '19.09.37', ua: 'com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip', extra: { androidSdkVersion: 30 } },
+        { name: 'MWEB', clientName: 'MWEB', clientVersion: '2.20240101.0.0', ua: 'Mozilla/5.0' },
+    ];
 
-        const payload = {
-            videoId,
-            context: {
-                client: {
-                    clientName: 'ANDROID',
-                    clientVersion: '19.09.37',
-                    androidSdkVersion: 30,
-                    hl: 'en',
-                    gl: 'US',
-                    userAgent: 'com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip'
-                }
-            },
-            contentCheckOk: true,
-            racyCheckOk: true
-        };
-
-        log.push('Sending InnerTube request...');
-        const start = Date.now();
-
-        const r = await axios.post(
-            'https://www.youtube.com/youtubei/v1/player?key=AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w&prettyPrint=false',
-            payload,
-            {
-                headers: {
-                    'Content-Type': 'application/json',
-                    'User-Agent': 'com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip',
-                    'X-YouTube-Client-Name': '3',
-                    'X-YouTube-Client-Version': '19.09.37'
+    for (const c of clients) {
+        try {
+            const payload = {
+                videoId,
+                context: {
+                    client: { clientName: c.clientName, clientVersion: c.clientVersion, hl: 'en', gl: 'US', ...c.extra }
                 },
-                timeout: 15000
-            }
-        );
+                contentCheckOk: true,
+                racyCheckOk: true
+            };
+            if (c.thirdParty) payload.context.thirdParty = c.thirdParty;
 
-        const elapsed = Date.now() - start;
-        log.push(`Response in ${elapsed}ms, status: ${r.status}`);
+            const r = await axios.post(
+                'https://www.youtube.com/youtubei/v1/player?key=AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w&prettyPrint=false',
+                payload,
+                { headers: { 'Content-Type': 'application/json', 'User-Agent': c.ua }, timeout: 8000 }
+            );
 
-        if (r.data?.streamingData) {
-            const sd = r.data.streamingData;
-            const formats = sd.formats || [];
-            const adaptive = sd.adaptiveFormats || [];
-            log.push(`Formats: ${formats.length} combined, ${adaptive.length} adaptive`);
-            log.push(`Title: ${r.data.videoDetails?.title}`);
+            const status = r.data?.playabilityStatus?.status;
+            const formats = r.data?.streamingData?.formats?.length || 0;
+            const adaptive = r.data?.streamingData?.adaptiveFormats?.length || 0;
+            const firstUrl = r.data?.streamingData?.formats?.[0]?.url ? 'YES' : 'NO';
 
-            for (let f of formats) {
-                log.push(`  ${f.qualityLabel}: url=${f.url ? 'YES' : 'NO'}, cipher=${f.signatureCipher ? 'YES' : 'NO'}`);
-                if (f.url) {
-                    log.push(`  URL: ${f.url.substring(0, 120)}...`);
-                }
-            }
-        } else {
-            log.push('No streamingData!');
-            if (r.data?.playabilityStatus) {
-                log.push(`PlayabilityStatus: ${r.data.playabilityStatus.status}`);
-                log.push(`Reason: ${r.data.playabilityStatus.reason || 'none'}`);
-            }
-        }
-    } catch (e) {
-        log.push(`ERROR: ${e.message}`);
-        if (e.response) {
-            log.push(`HTTP ${e.response.status}: ${JSON.stringify(e.response.data).substring(0, 300)}`);
+            results[c.name] = { status, formats, adaptive, hasDirectUrl: firstUrl, reason: r.data?.playabilityStatus?.reason || 'none' };
+        } catch (e) {
+            results[c.name] = { error: e.message.substring(0, 80) };
         }
     }
 
-    return res.status(200).json({ log });
+    return res.status(200).json({ videoId, results });
 };
