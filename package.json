@@ -4,7 +4,6 @@
   "description": "Twitter Video Downloader for Vercel",
   "license": "ISC",
   "dependencies": {
-    "@distube/ytdl-core": "^4.16.10",
     "axios": "^1.6.0",
     "instagram-url-direct": "^1.0.13"
   },
