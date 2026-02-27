@@ -1,0 +1,7 @@
+{
+    "functions": {
+        "api/download.js": {
+            "maxDuration": 30
+        }
+    }
+}
