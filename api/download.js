@@ -206,38 +206,30 @@ module.exports = async (req, res) => {
             } catch (e) { console.error('IG library fail:', e.message); }
         }
 
-        // Cobalt: try for all platforms (including Instagram fallback)
-        if (!result) {
-            result = await downloadFromCobalt(url, format);
-        }
-
-        // Fallback for YouTube: use ytdl-core to get direct CDN URL
+        // YouTube: try ytdl-core FIRST (fast, direct CDN URL), then Cobalt as fallback
         if (!result && (url.includes('youtube.com') || url.includes('youtu.be'))) {
-            console.log('Cobalt failed for YouTube, falling back to ytdl-core CDN URL...');
+            // Step 1: Try ytdl-core first — it gets direct CDN URLs quickly
+            console.log('[YouTube] Trying ytdl-core first...');
             try {
                 const ytdl = require('@distube/ytdl-core');
                 const info = await ytdl.getInfo(url);
 
                 let ytdlFormat = null;
-                // Try multiple format selection strategies
                 const strategies = [
-                    () => ytdl.chooseFormat(info.formats, { filter: 'audioandvideo', quality: 'highestvideo' }),
-                    () => ytdl.chooseFormat(info.formats, { filter: 'audioandvideo', quality: 'lowest' }),
-                    () => info.formats.find(f => f.itag === 18), // 360p mp4 combined
-                    () => info.formats.find(f => f.itag === 22), // 720p mp4 combined
+                    () => info.formats.find(f => f.itag === 18 && f.url), // 360p mp4
+                    () => info.formats.find(f => f.itag === 22 && f.url), // 720p mp4
                     () => info.formats.find(f => f.hasAudio && f.hasVideo && f.url),
-                    () => info.formats.find(f => f.hasAudio && f.hasVideo),
                 ];
 
                 for (const strategy of strategies) {
                     try {
-                        const candidate = strategy();
-                        if (candidate && candidate.url) { ytdlFormat = candidate; break; }
-                    } catch (e) { /* try next strategy */ }
+                        const c = strategy();
+                        if (c && c.url) { ytdlFormat = c; break; }
+                    } catch (e) { }
                 }
 
                 if (ytdlFormat && ytdlFormat.url) {
-                    console.log(`[YTDL-CORE FALLBACK] Got ${ytdlFormat.qualityLabel || 'unknown'} CDN URL`);
+                    console.log(`[YTDL-CORE] Got ${ytdlFormat.qualityLabel || '?'} CDN URL`);
                     const cleanTitle = (info.videoDetails.title || 'youtube_video')
                         .replace(/[^\w\s-]/g, '').trim().substring(0, 50).replace(/\s+/g, '_');
                     result = {
@@ -246,12 +238,35 @@ module.exports = async (req, res) => {
                         status: 'redirect',
                         directCdn: true
                     };
-                } else {
-                    console.log('[YTDL-CORE] No format with direct URL found (decipher may have failed)');
                 }
             } catch (e) {
-                console.log('ytdl-core fallback error:', e.message.substring(0, 100));
+                console.log('ytdl-core failed:', e.message.substring(0, 80));
             }
+
+            // Step 2: If ytdl-core failed, try Cobalt with aggressive timeout (max 2 instances)
+            if (!result) {
+                console.log('[YouTube] ytdl-core failed, trying Cobalt (limited)...');
+                try {
+                    const fastInstances = STATIC_COBALT_INSTANCES.slice(0, 2);
+                    for (const inst of fastInstances) {
+                        try {
+                            console.log(`[TRY-FAST] ${inst}`);
+                            const r = await tryCobaltInstance(inst, url, format);
+                            if (r && r.url) {
+                                const valid = await validateVideoUrl(r.url);
+                                if (valid) { result = r; console.log(`[OK-FAST] ${inst}`); break; }
+                            }
+                        } catch (e) {
+                            console.log(`[FAIL-FAST] ${inst}: ${e.message.substring(0, 60)}`);
+                        }
+                    }
+                } catch (e) { }
+            }
+        }
+
+        // Non-YouTube platforms: use Cobalt (full instance list)
+        if (!result && !url.includes('youtube.com') && !url.includes('youtu.be')) {
+            result = await downloadFromCobalt(url, format);
         }
 
         // Add Fallback for Twitter using fxtwitter API if Cobalt fails
