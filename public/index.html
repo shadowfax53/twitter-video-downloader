@@ -193,26 +193,40 @@
 
             try {
                 let data = null;
-                // YouTube: Cobalt public sunucuları uzun videolar için 0-byte döndürdüğünden 
-                // native iframe widget (yüksek başarı oranlı loader.to) kullanılıyor.
+                // YouTube: Vercel veri merkezi IP'leri ve public API'ler (Cobalt vb.) 
+                // YouTube tarafindan "bot" olarak algilanip 0-byte veya login hatasi verdiginden,
+                // kullaniciyi seffaf bir aciklama ile saglam bir partner sunucuya yonlendiriyoruz.
                 if (isYouTubeUrl(url)) {
-                    const loaderWidgetParams = new URLSearchParams({
-                        url: url,
-                        f: format === 'mp3' ? 'mp3' : '720',
-                        color: '1DA1F2'
-                    });
-                    const widgetUrl = `https://loader.to/api/button/?${loaderWidgetParams}`;
-
                     messageDiv.innerHTML = `
-                        <div style="background: #253341; padding: 20px; border-radius: 10px; margin-top: 20px;">
-                            <h3 style="color: #00BA7C; margin: 0 0 10px 0;">✅ YouTube İndirme Linki Hazır</h3>
-                            <p style="font-size: 14px; color: #8899A6;">İndirmeyi başlatmak için aşağıdaki butona tıklayın:</p>
-                            <iframe src="${widgetUrl}" width="100%" height="60" style="border:none; margin-top: 10px; overflow: hidden;" scrolling="no" allowtransparency="true"></iframe>
-                            <p style="font-size: 11px; margin-top: 10px; color: #657786;">* YouTube videoları limitsiz partner sunuculardan çekilmektedir.</p>
+                        <div style="background: #253341; padding: 20px; border-radius: 10px; margin-top: 20px; border: 1px solid #38444D;">
+                            <h3 style="color: #FFD700; margin: 0 0 10px 0;">⚠️ YouTube Güvenlik Koruması</h3>
+                            <p style="font-size: 14px; color: #8899A6;">
+                                YouTube'un sunucu tarafli agresif engellemeleri (Bot Korumasi) nedeniyle bu video doğrudan bu sayfa içerisinden indirilemiyor.
+                            </p>
+                            <p style="font-size: 13px; margin-top: 10px; color: #8899A6;">
+                                Videonuzu sorunsuz ve hizli indirebilmeniz için sizi <b>limitsiz partner sunucuya (Loader.to)</b> yönlendiriyoruz.
+                            </p>
+                            <button id="externalDownloadBtn" style="
+                                background-color: #00BA7C; color: white; border: none;
+                                padding: 12px 30px; border-radius: 20px; font-weight: bold;
+                                margin-top: 15px; cursor: pointer; font-size: 16px; width: 100%; transition: 0.2s;
+                            ">🌐 Yönlendir ve İndir</button>
                         </div>
                     `;
                     downloadBtn.disabled = false;
                     downloadBtn.textContent = 'İndir';
+
+                    const redirectUrl = `https://loader.to/en125/download.php?url=${encodeURIComponent(url)}`;
+
+                    document.getElementById('externalDownloadBtn').addEventListener('click', () => {
+                        window.open(redirectUrl, '_blank');
+                    });
+
+                    // Otomatik yonlendirme
+                    setTimeout(() => {
+                        window.open(redirectUrl, '_blank');
+                    }, 3500);
+
                     return;
                 }
 
